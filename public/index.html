@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Convertisseur FLAC → AIFF</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; background: radial-gradient(circle at 20% 20%, rgba(99,102,241,0.08), transparent 30%), #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .shell { max-width: 960px; margin: 32px auto; padding: 0 16px; }
+    .card { background: #0b1224; border: 1px solid #1f2937; border-radius: 18px; padding: 22px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
+    h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -0.5px; }
+    p { margin: 0 0 14px; color: #94a3b8; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .drop { border: 1.5px dashed #334155; border-radius: 12px; padding: 22px; text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; background: #0f172a; }
+    .drop:hover { border-color: #38bdf8; background: #0b152a; }
+    input[type=file] { display: none; }
+    button { padding: 11px 14px; border: none; border-radius: 10px; background: linear-gradient(135deg,#38bdf8,#6366f1); color: white; font-weight: 600; cursor: pointer; box-shadow: 0 10px 30px rgba(99,102,241,0.25); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+    button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 15px 38px rgba(56,189,248,0.35); }
+    .btn-secondary { background: #1f2937; box-shadow: none; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #1f2937; font-size: 14px; }
+    th { text-align: left; color: #cbd5e1; font-weight: 600; }
+    td.status { color: #cbd5e1; }
+    .pill { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 12px; }
+    .pill.wait { background: #1e293b; color: #e2e8f0; }
+    .pill.work { background: #0ea5e9; color: #0b1224; }
+    .pill.done { background: #22c55e; color: #0b1224; }
+    .pill.err { background: #ef4444; color: #0b1224; }
+    .small { color: #94a3b8; font-size: 12px; margin-top: 8px; }
+    .actions { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .overlay { position: fixed; inset: 0; background: linear-gradient(135deg, #0f172a 0%, #0b1224 60%, #0f172a 100%); display: flex; align-items: center; justify-content: center; z-index: 10; }
+    .overlay-card { max-width: 420px; padding: 28px; background: #0b1224; border: 1px solid #1f2937; border-radius: 18px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+    .overlay-card h2 { margin: 0 0 10px; }
+    .overlay-card p { margin: 0 0 18px; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="overlay" id="welcome">
+    <div class="overlay-card">
+      <h2>Bienvenue, Bruno</h2>
+      <p>J'espère que ceci servira à ce que tu veux.</p>
+      <button id="enterBtn">Entrer</button>
+    </div>
+  </div>
+  <div class="shell">
+    <div class="card">
+      <h1>FLAC → AIFF</h1>
+      <p>Charge plusieurs FLAC, convertis-les en 16 bits / 44,1 kHz (CD) et télécharge les AIFF un par un ou tous ensemble.</p>
+
+      <div class="grid">
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept="audio/flac" multiple />
+          <strong>Clique ou dépose tes FLAC ici</strong>
+          <div class="small">Plusieurs fichiers sont acceptés.</div>
+        </label>
+        <div>
+          <div class="actions">
+            <button id="convertZip" disabled>Tout convertir (ZIP)</button>
+            <button id="convertEach" class="btn-secondary" disabled>Convertir et télécharger un par un</button>
+            <button id="clear" class="btn-secondary" disabled>Vider la liste</button>
+          </div>
+          <div class="small" id="status">Aucun fichier chargé.</div>
+        </div>
+      </div>
+
+      <table id="table">
+        <thead>
+          <tr><th>Fichier</th><th>Taille</th><th>Statut</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+const fileInput = document.getElementById('file');
+const drop = document.getElementById('drop');
+const statusEl = document.getElementById('status');
+const btnZip = document.getElementById('convertZip');
+const btnEach = document.getElementById('convertEach');
+const btnClear = document.getElementById('clear');
+const tbody = document.querySelector('#table tbody');
+
+let files = []; // {file: File, status: 'en attente'|'traitement'|'ok'|'erreur', msg?:string}
+let busy = false;
+
+const fmtSize = (n) => n ? (n/1024/1024).toFixed(2) + ' MB' : '';
+
+function render() {
+  tbody.innerHTML = '';
+  files.forEach((item) => {
+    const tr = document.createElement('tr');
+    const statusClass = item.status === 'ok' ? 'pill done' :
+                        item.status === 'traitement' ? 'pill work' :
+                        item.status === 'erreur' ? 'pill err' : 'pill wait';
+    const statusText = item.msg ? `${item.status} · ${item.msg}` : item.status;
+    tr.innerHTML = `<td>${item.file.name}</td><td>${fmtSize(item.file.size)}</td><td class="status"><span class="${statusClass}">${statusText}</span></td>`;
+    tbody.appendChild(tr);
+  });
+  const hasFiles = files.length > 0;
+  btnZip.disabled = !hasFiles || busy;
+  btnEach.disabled = !hasFiles || busy;
+  btnClear.disabled = !hasFiles || busy;
+  statusEl.textContent = hasFiles ? `${files.length} fichier(s) prêt(s)` : 'Aucun fichier chargé.';
+}
+
+function addFiles(list) {
+  for (const f of list) {
+    if (f.type === 'audio/flac' || f.name.toLowerCase().endsWith('.flac')) {
+      files.push({ file: f, status: 'en attente' });
+    }
+  }
+  render();
+}
+
+fileInput.addEventListener('change', (e) => addFiles(e.target.files));
+
+drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.style.borderColor = '#38bdf8'; });
+drop.addEventListener('dragleave', () => { drop.style.borderColor = '#334155'; });
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  drop.style.borderColor = '#334155';
+  if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+});
+drop.addEventListener('click', () => fileInput.click());
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function convertZip() {
+  if (!files.length || busy) return;
+  busy = true; render();
+  files.forEach(f => f.status = 'traitement');
+  render();
+  try {
+    const form = new FormData();
+    files.forEach(f => form.append('files', f.file, f.file.name));
+    const resp = await fetch('/convert-multi', { method: 'POST', body: form });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || 'Erreur côté serveur');
+    }
+    const blob = await resp.blob();
+    downloadBlob(blob, 'convertis-aiff.zip');
+    files.forEach(f => { f.status = 'ok'; });
+    statusEl.textContent = 'Conversion terminée (ZIP).';
+  } catch (err) {
+    files.forEach(f => { f.status = 'erreur'; f.msg = err.message; });
+    statusEl.textContent = 'Échec : ' + err.message;
+  } finally {
+    busy = false; render();
+  }
+}
+
+async function convertEach() {
+  if (!files.length || busy) return;
+  busy = true; render();
+  for (const item of files) {
+    item.status = 'traitement'; render();
+    try {
+      const form = new FormData();
+      form.append('file', item.file, item.file.name);
+      const resp = await fetch('/convert', { method: 'POST', body: form });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || 'Erreur côté serveur');
+      }
+      const blob = await resp.blob();
+      downloadBlob(blob, item.file.name.replace(/\.flac$/i, '') + '.aiff');
+      item.status = 'ok';
+      item.msg = '';
+    } catch (err) {
+      item.status = 'erreur';
+      item.msg = err.message;
+    }
+  }
+  busy = false; render();
+}
+
+btnZip.addEventListener('click', convertZip);
+btnEach.addEventListener('click', convertEach);
+btnClear.addEventListener('click', () => { if (busy) return; files = []; render(); });
+
+document.getElementById('enterBtn').addEventListener('click', () => {
+  document.getElementById('welcome').style.display = 'none';
+});
+
+render();
+</script>
+</body>
+</html>
