@@ -11,6 +11,7 @@ Conversor sencillo de FLAC a AIFF con CLI y GUI (Tkinter).
   - `brew install python-tk@3.12`
   - O instala Python desde python.org (ya incluye Tk).
 
+
 ## Uso rápido
 CLI:
 ```bash
